@@ -1,258 +1,220 @@
-# 📚 Shelfwise: Library Management System
+# Shelfwise: Library Management System
 
-A full-stack web app for running a college library. Members browse the catalogue, borrow books and track due dates. Books are returned at the circulation desk, where a librarian checks them in. Librarians manage the collection, run the circulation desk and see library-wide statistics.
+A full-stack library management system for a college library. It tracks every physical copy by barcode, runs a circulation desk for librarians, queues members for books that are out, keeps a ledger of fines, sends due-date reminders, and records every action in an audit log.
 
-**Backend:** Java 17 · Spring Boot 3 · Spring Security (JWT) · Spring Data JPA · H2 / MySQL
+**Backend:** Java 17 · Spring Boot 3 · Spring Security (JWT) · Spring Data JPA · Flyway · H2 / MySQL
 **Frontend:** React 18 · Vite · React Router · Axios
 
 ---
 
-## ✨ Features
+## Features
 
-### For members (students)
-- Register and log in (JWT-based authentication)
-- Search the catalogue by title, author or ISBN, filter by category, sort, and page through results
-- See live availability ("2 of 4 available") and borrow a book in one click
-- Personal dashboard: books currently borrowed, due dates, overdue warnings and fines building up
-- Loan history with return dates and fines paid
+### Members
+- Browse the catalogue with live availability ("2 of 3 on the shelf", "All out · 2 waiting")
+- Borrow online: the system picks a free copy, or the copy set aside for them
+- Join the holds queue when every copy is out, see their place in line, and get notified when it's their turn
+- Renew loans online (within the member type's limit, and only if nobody is waiting)
+- See fines with every payment and waiver, and exactly why they can't borrow if they're blocked
+- Reminders before a book is due and when it's overdue
 
-### For librarians (admin)
-- Dashboard with library statistics (titles, copies on the shelf, active and overdue loans, fines collected)
-- Add, edit and delete books (with validation and duplicate-ISBN checks)
-- Circulation desk: view all loans filtered by *on loan / overdue / returned*, and mark books as returned
-- Members list with each member's borrowing summary
+Members **cannot return books themselves**: books come back to the circulation desk.
 
-### Business rules (enforced in the backend)
-| Rule | Value |
+### Librarians
+- **Desk:** scan a library card to see the member's standing, scan copies to issue them; scan returns to check them in. Each check-in says where the copy goes next: back to its shelf, or onto the hold shelf for the next member in line.
+- **Catalogue:** titles and their physical copies, each with a barcode, shelf and status (on the shelf, on loan, hold shelf, damaged, lost, withdrawn)
+- **Loans:** everything out or returned; check in, renew or mark lost
+- **Holds:** the hold shelf and the waiting queue across the library
+- **Fines:** take payments (full or partial) and waive fines with a reason
+- **Members:** search, change member type, suspend and reactivate
+- **Reports:** circulation per day, most borrowed titles, fines collected; CSV downloads of loans, fines and overdue books
+
+### Admins
+Everything a librarian can do, plus:
+- **Rules:** loan limits, loan periods, renewals, fine rates and blocking thresholds per member type; hold pickup window, lost item fee, reminder timing
+- **Staff:** create librarian and admin accounts
+- **Audit log:** every circulation, fine, catalogue and rules change, with who made it
+- Run the daily job on demand
+
+### Library rules (all enforced in the backend)
+| Rule | Where |
 |------|-------|
-| Loan period | 14 days |
-| Max books per member at once | 3 |
-| Late fine | ₹10 per day |
-| Member with an overdue book | cannot borrow more until it is returned |
-| Same title twice | not allowed at the same time |
-| Book with copies on loan | cannot be deleted; total copies can't go below copies on loan |
+| A member can borrow if: active (not suspended), under their loan limit, no overdue books, unpaid fines at or under their type's threshold | `BorrowingPolicy` |
+| One copy of a title per member at a time | `CirculationService` |
+| Holds only when no copy is on the shelf; a returned copy goes to the first member in line and waits on the hold shelf for N days | `HoldService` |
+| Renewals: within the type's limit, not when overdue, not when someone is waiting | `CirculationService.renewBlockedReason` |
+| Late fine = days late × the member type's daily rate, charged at check-in | `FineService` |
+| Lost copy = lost item fee + any late fine | `CirculationService.markLost` |
+| Payments and waivers can't exceed what's owed; waivers need a reason | `Fine`, `WaiverRequest` |
+| Only librarians and admins check books in | `@StaffOnly` + URL rules |
 
-All values can be changed in `backend/src/main/resources/application.properties`.
+Default rules (editable on the Rules page):
+
+| Type | Books | Days | Renewals | Fine/day | Blocked over | Holds |
+|------|------:|-----:|---------:|---------:|-------------:|------:|
+| Student | 3 | 14 | 1 | ₹10 | ₹100 | 3 |
+| Faculty | 10 | 60 | 3 | ₹5 | ₹500 | 10 |
+| Staff | 5 | 30 | 2 | ₹5 | ₹200 | 5 |
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
-```mermaid
-flowchart LR
-    U[Browser] -->|React SPA| F[Frontend<br/>Vite :5173]
-    F -->|REST + JWT<br/>/api/*| C[Controllers]
-    subgraph B[Spring Boot backend :8080]
-        S[JWT filter +<br/>Spring Security] --> C
-        C --> SV[Services<br/>business rules]
-        SV --> R[JPA repositories]
-    end
-    R --> DB[(H2 / MySQL)]
+```
+React (Vite)  ──/api──▶  Spring Boot REST API  ──JPA──▶  H2 file DB (or MySQL)
+                          JWT auth · role checks          schema owned by Flyway
 ```
 
-The backend follows a layered design: **Controller → Service → Repository → Entity**, with DTOs (Java records) at the API boundary so entities are never exposed directly.
+The backend is organised **by feature**. Each package owns its entities, repositories, service and controller:
 
-### Database design
+| Package | Responsibility |
+|---------|----------------|
+| `catalog` | Titles (`Book`) and physical items (`Copy`), availability, barcodes |
+| `circulation` | Loans: desk checkout, self-service borrowing, check-in, renewals, lost items, `BorrowingPolicy` |
+| `hold` | The holds queue: placing, readying a returned copy, expiry, cancellation |
+| `fine` | The fines ledger: charges, payments and waivers (`FineTransaction`) |
+| `member` | Users, roles, member types, card numbers, suspensions, staff accounts |
+| `notification` | Member messages; `NotificationSender` (logs for now, swap in email/SMS) |
+| `audit` | Append-only audit trail, written in the same transaction as the action |
+| `jobs` | The daily job: expire holds, due-soon reminders, overdue notices |
+| `report` | Circulation summaries and CSV exports |
+| `settings` | Library-wide settings and the admin API |
+| `selfservice` | `/api/me/**`: everything a member does for themselves |
+| `dashboard`, `auth`, `seed`, `common` | Dashboards, login/registration, demo data, shared config, errors and security |
 
-```mermaid
-erDiagram
-    USERS ||--o{ LOANS : borrows
-    BOOKS ||--o{ LOANS : "is lent in"
-    USERS {
-        bigint id PK
-        varchar name
-        varchar email UK
-        varchar password "BCrypt hash"
-        varchar role "ADMIN | MEMBER"
-        timestamp created_at
-    }
-    BOOKS {
-        bigint id PK
-        varchar title
-        varchar author
-        varchar isbn UK
-        varchar category
-        int published_year
-        int total_copies
-        int available_copies
-        bigint version "optimistic lock"
-    }
-    LOANS {
-        bigint id PK
-        bigint user_id FK
-        bigint book_id FK
-        date borrow_date
-        date due_date
-        date return_date "null = still out"
-        int fine
-    }
-```
+Design choices worth knowing:
+- **Copies are first-class.** A loan points to a specific copy, so the desk scans real barcodes and history shows exactly which item went where. Availability is computed from copy statuses, never stored as a counter.
+- **One place for each rule.** `BorrowingPolicy` gives the member's dashboard, the desk and the API the same answer, including every reason someone is blocked.
+- **Money is a ledger.** Fines are never edited; each payment or waiver is a `FineTransaction` with the librarian who recorded it.
+- **Schema migrations.** Flyway owns the schema (`db/migration`); Hibernate only validates that entities match it.
+- **Audit in the same transaction.** `AuditService.record` requires an open transaction, so an action and its audit entry are saved together or not at all.
+- **Concurrency.** Copies, titles and fines use optimistic locking (`@Version`), so two desks can't issue the same copy at once.
+- **Defence in depth.** Every staff endpoint is annotated `@StaffOnly` or `@AdminOnly`, and the URL rules in `SecurityConfig` repeat the same restrictions.
+
+### Roles
+`MEMBER` borrows. `LIBRARIAN` runs the desk and the catalogue. `ADMIN` also sets rules, manages staff and reads the audit log.
 
 ### How login works (JWT)
 1. The user posts their email and password to `/api/auth/login`.
-2. Spring Security checks the password against the BCrypt hash in the database.
-3. The server returns a signed JWT (valid for 24 hours).
-4. React stores the token and sends it as `Authorization: Bearer <token>` on every request.
-5. `JwtAuthFilter` validates the token on each request and sets the logged-in user; role rules (`ADMIN` / `MEMBER`) are applied at both URL and method level (`@PreAuthorize`).
+2. Spring Security checks the password against the BCrypt hash.
+3. The server returns a signed JWT (valid for 24 hours), sent back as `Authorization: Bearer <token>`.
+4. `JwtAuthFilter` validates it on every request and loads the user.
 
 ---
 
-## 🚀 Getting started
+## Getting started
 
 ### Prerequisites
-- **Java 17+** (`java -version`)
-- **Maven 3.9+** (`mvn -v`), or open the `backend` folder in IntelliJ IDEA, which has Maven built in
-- **Node.js 18+** (`node -v`)
+- **Java 17+**
+- **Maven 3.9+**, or open `backend` in IntelliJ IDEA (Maven is built in)
+- **Node.js 18+**
 
 ### 1. Run the backend
 ```bash
 cd backend
 mvn spring-boot:run
 ```
-The API starts at **http://localhost:8080**. On the first run it creates the database and adds demo data automatically.
+The API starts at **http://localhost:8080**. On first run Flyway creates the schema and the seeder adds a demo library: 14 titles with copies on named shelves, loans (active, overdue, returned, lost), a holds queue, a hold ready for pickup, fines (paid, owed, part-waived), a damaged and a withdrawn copy.
 
-No database installation is needed: it uses an H2 file database stored in `backend/data/`.
-To look inside the database, open **http://localhost:8080/h2-console** and use JDBC URL `jdbc:h2:file:./data/librarydb`, user `sa`, empty password.
+The H2 database lives in `backend/data/shelfwise*`. Console: **http://localhost:8080/h2-console**, JDBC URL `jdbc:h2:file:./data/shelfwise`, user `sa`, empty password.
 
-> In IntelliJ: open the `backend` folder, wait for Maven to import, then run `LibraryApplication.java`.
+> Upgrading from the earlier version: the old `backend/data/librarydb*` files are no longer used and can be deleted once you no longer need them.
 
-### 2. Run the frontend (in a second terminal)
+### 2. Run the frontend
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-Open **http://localhost:5173**.
+Open **http://localhost:5173**. To point the dev server at a backend on another port: `API_TARGET=http://localhost:8081 npm run dev`.
 
 ### 3. Log in with a demo account
 | Role | Email | Password |
 |------|-------|----------|
-| Librarian (admin) | `admin@library.com` | `admin123` |
-| Student (member) | `student@library.com` | `student123` |
-| Student (member, has an overdue book) | `priya@library.com` | `priya123` |
+| Admin | `admin@library.com` | `admin123` |
+| Librarian | `librarian@library.com` | `librarian123` |
+| Student | `student@library.com` | `student123` |
+| Faculty | `faculty@library.com` | `faculty123` |
+| Student, blocked (overdue book, unpaid fines) | `priya@library.com` | `priya123` |
 
-You can also register a new member account from the sign-up page.
+Library card numbers are shown on each member's profile (e.g. `M000003`); copy barcodes look like `SW000013`. Try the desk: scan card `M000007` and issue `SW000013`, the copy waiting on the hold shelf for Ananya.
 
-### Optional: use MySQL instead of H2
+### Optional: MySQL instead of H2
 ```bash
-docker compose up -d          # or use your own MySQL with user root / password root
+docker compose up -d
 cd backend
 mvn spring-boot:run -Dspring-boot.run.profiles=mysql
 ```
-Database credentials can be set with the `DB_USERNAME` and `DB_PASSWORD` environment variables.
+Uses a database called `shelfwise`. Credentials come from `DB_USERNAME` / `DB_PASSWORD`.
 
 ---
 
-## 🧪 Running tests
+## Running tests
 ```bash
 cd backend
 mvn test
 ```
-- `LoanServiceTest`: unit tests for the borrowing rules (copy availability, loan limit, overdue block, fines) using Mockito and a fixed clock
-- `AuthAndBookApiTest`: integration tests that start the app with an in-memory database and call the real endpoints (register, login, role-based access, validation errors)
+- `LibraryApiTest`: starts the whole app on an in-memory database (migrated by Flyway, filled by the seeder) and drives the real API: role restrictions, self-service borrowing, desk checkout and check-in, the holds queue handing a returned copy to the right member, renewal limits, blocked members, fine payments, CSV reports
+- `FineTest`: the fine ledger rules without a database
 
 ---
 
-## 📡 REST API
+## REST API
 
-All endpoints except `/api/auth/**` need the header `Authorization: Bearer <token>`.
+Self-service (any logged-in user, scoped to themselves)
 
-| Method | Endpoint | Access | Description |
-|--------|----------|--------|-------------|
-| POST | `/api/auth/register` | Public | Create a member account, returns token |
-| POST | `/api/auth/login` | Public | Log in, returns token |
-| GET | `/api/users/me` | Logged in | Current user |
-| GET | `/api/books?q=&category=&page=&size=&sort=&dir=` | Logged in | Search books (paginated) |
-| GET | `/api/books/{id}` | Logged in | Book details |
-| GET | `/api/books/categories` | Logged in | List of categories |
-| POST | `/api/books` | Admin | Add a book |
-| PUT | `/api/books/{id}` | Admin | Update a book |
-| DELETE | `/api/books/{id}` | Admin | Delete a book |
-| POST | `/api/loans/borrow/{bookId}` | Logged in | Borrow a book |
-| POST | `/api/loans/{loanId}/return` | Admin | Check a book in at the desk (fine is calculated) |
-| GET | `/api/loans/my` | Logged in | My loans |
-| GET | `/api/loans?status=all\|active\|overdue\|returned` | Admin | All loans |
-| GET | `/api/dashboard/me` | Logged in | Member dashboard stats |
-| GET | `/api/dashboard/admin` | Admin | Library dashboard stats |
-| GET | `/api/admin/members` | Admin | Members with borrowing summary |
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| POST | `/api/auth/register`, `/api/auth/login` | Create a member account / log in |
+| GET | `/api/me` | The logged-in user |
+| GET | `/api/me/dashboard` | Loans, holds, fines, eligibility, messages |
+| GET / POST | `/api/me/loans` | My loans / borrow a title online `{bookId}` |
+| POST | `/api/me/loans/{id}/renew` | Renew my loan |
+| GET / POST | `/api/me/holds` | My holds / place a hold `{bookId}` |
+| DELETE | `/api/me/holds/{id}` | Cancel my hold |
+| GET | `/api/me/fines`, `/api/me/notifications` | My fines ledger / messages |
+| GET | `/api/books`, `/api/books/{id}`, `/api/books/categories` | Search the catalogue |
 
-Errors always come back in the same JSON shape:
-```json
-{ "status": 400, "error": "Bad Request", "message": "You can borrow at most 3 books at a time", "fieldErrors": null }
-```
+Staff (librarian or admin)
 
-Example with curl:
-```bash
-TOKEN=$(curl -s -X POST localhost:8080/api/auth/login -H "Content-Type: application/json" \
-  -d '{"email":"student@library.com","password":"student123"}' | sed -E 's/.*"token":"([^"]+)".*/\1/')
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/desk/patrons/{card}` | Member standing for the desk |
+| POST | `/api/desk/checkout` | Issue `{cardNumber, barcode}` |
+| POST | `/api/desk/checkin` | Check in `{barcode}` |
+| GET | `/api/loans?status=active\|overdue\|returned\|lost\|all` | Loans |
+| POST | `/api/loans/{id}/checkin` · `/renew` · `/lost` | Loan actions |
+| GET / DELETE | `/api/holds?status=ready\|waiting\|active`, `/api/holds/{id}` | Holds queue |
+| GET | `/api/fines?status=open\|settled\|all` | Fines |
+| POST | `/api/fines/{id}/payments` · `/waivers` | Pay `{amount, note}` / waive `{amount, reason}` |
+| POST / PUT / DELETE | `/api/books`, `/api/books/{id}` | Manage titles |
+| GET / POST | `/api/books/{id}/copies` | Copies of a title / add copies |
+| GET | `/api/books/{id}/holds` | Queue for a title |
+| PATCH | `/api/copies/{id}` | Status, shelf, note |
+| GET | `/api/members`, `/api/members/{id}`, `/api/members/types` | Members |
+| PUT / POST | `/api/members/{id}/type` · `/suspend` · `/reactivate` | Member actions |
+| GET | `/api/dashboard/staff` | Staff dashboard |
+| GET | `/api/reports/summary?from&to`, `/loans.csv`, `/fines.csv`, `/overdue.csv` | Reports |
 
-curl -s "localhost:8080/api/books?q=java" -H "Authorization: Bearer $TOKEN"
-```
+Admin
 
----
-
-## 📁 Project structure
-
-```
-library-management-system/
-├── backend/                         Spring Boot REST API
-│   ├── pom.xml
-│   └── src/
-│       ├── main/java/com/library/
-│       │   ├── LibraryApplication.java
-│       │   ├── config/              Security, CORS, clock, demo data seeder
-│       │   ├── controller/          REST endpoints
-│       │   ├── dto/                 Request/response records
-│       │   ├── entity/              JPA entities: User, Book, Loan
-│       │   ├── exception/           Custom exceptions + global JSON error handler
-│       │   ├── repository/          Spring Data JPA repositories
-│       │   ├── security/            JWT service, JWT filter, UserDetailsService
-│       │   └── service/             Business logic
-│       ├── main/resources/          application.properties (+ mysql profile)
-│       └── test/java/com/library/   Unit and integration tests
-├── frontend/                        React app (Vite)
-│   ├── package.json
-│   ├── vite.config.js               Dev proxy: /api → localhost:8080
-│   └── src/
-│       ├── api/                     Axios client + API functions
-│       ├── components/              Layout, modals, book cover, badges…
-│       ├── context/                 Auth and toast notifications
-│       ├── hooks/                   Reusable logic
-│       ├── pages/                   Login, Register, Dashboard, Books, Loans, Members
-│       └── utils/                   Date and currency formatting
-├── docker-compose.yml               Optional MySQL
-└── README.md
-```
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET / PUT | `/api/admin/settings` | Library settings and member types |
+| PUT | `/api/admin/member-types/{id}` | Edit a member type's rules |
+| GET / POST | `/api/admin/staff` | Staff accounts |
+| GET | `/api/admin/audit?action&q&page` | Audit log |
+| POST | `/api/admin/jobs/daily` | Run the daily job now |
 
 ---
 
-## ☁️ Uploading to GitHub
+## Possible enhancements
+- Email or SMS delivery: provide a `NotificationSender` bean (JavaMail, Twilio)
+- Online fine payment through a payment gateway
+- Printable barcode labels and library cards
+- Inter-branch transfers and multiple locations
+- OpenAPI documentation (`springdoc-openapi`)
 
-1. Create a new **empty** repository on GitHub (don't add a README there), e.g. `library-management-system`.
-2. In this project folder run:
-```bash
-git init
-git add .
-git commit -m "Library Management System: Spring Boot + React"
-git branch -M main
-git remote add origin https://github.com/<your-username>/library-management-system.git
-git push -u origin main
-```
-The `.gitignore` already excludes `node_modules`, `target`, the local database and IDE files.
-
-Tip: add a few screenshots (login, books page, admin dashboard) to a `screenshots/` folder and link them here. It makes the repository look much better.
-
----
-
-## 🔮 Possible enhancements
-- Book reservations / waiting list when all copies are out
-- Email reminders before the due date (Spring `@Scheduled` + JavaMail)
-- Book cover uploads and barcode scanning
-- Online fine payment
-- Swagger / OpenAPI documentation (`springdoc-openapi`)
-- Deployment: backend on Render/Railway, frontend on Vercel/Netlify (set `VITE_API_URL` and `app.cors.allowed-origins`)
-
-## 🔐 Security notes
+## Security notes
 - Passwords are hashed with BCrypt; the API never returns them.
-- The JWT secret in `application.properties` is for development. For a deployed app set the `JWT_SECRET` environment variable (Base64, at least 32 bytes), e.g. `openssl rand -base64 48`.
-- Book stock uses optimistic locking (`@Version`), so two people can't both borrow the last copy at the same moment.
+- The JWT secret in `application.properties` is for development. For a deployed app set `JWT_SECRET` (Base64, at least 32 bytes), e.g. `openssl rand -base64 48`.
+- Staff endpoints are protected twice: method annotations and URL rules.

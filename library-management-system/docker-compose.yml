@@ -7,7 +7,7 @@ services:
     container_name: library-mysql
     environment:
       MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: librarydb
+      MYSQL_DATABASE: shelfwise
     ports:
       - "3306:3306"
     volumes:

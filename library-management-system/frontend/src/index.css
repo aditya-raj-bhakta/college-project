@@ -1783,6 +1783,8 @@ input.invalid { border-color: var(--late); }
 .member-top { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 24px; }
 .member-bottom { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
 .member-bottom > .member-fines { grid-column: 1 / -1; }
+.member-bottom { margin-bottom: 24px; }
+.member-bottom > .card { margin-bottom: 0; }
 .type-rules { margin: 12px 0 0; }
 
 /* ----- Reports ----- */
@@ -1820,7 +1822,11 @@ input.invalid { border-color: var(--late); }
 .trend-tip-date { color: var(--text-3); font-family: var(--font-mono); margin-bottom: 4px; }
 .trend-tip-row { display: flex; align-items: center; gap: 8px; color: var(--text-2); }
 .trend-tip-val { margin-left: auto; font-family: var(--font-mono); color: var(--text-1); }
-.trend-swatch { width: 8px; height: 8px; border-radius: 2px; }
+.trend-swatch { width: 10px; height: 10px; border-radius: 2px; background: var(--c); }
+.trend-swatch.is-outlined { background: color-mix(in srgb, var(--c) 28%, transparent); box-shadow: inset 0 0 0 1.5px var(--c); }
+.trend-hover { fill: rgba(238, 240, 245, 0.04); }
+.trend-day { transform-box: fill-box; transform-origin: bottom; animation: grow-up 480ms var(--ease) both; animation-delay: calc(var(--i, 0) * 12ms); }
+@keyframes grow-up { from { transform: scaleY(0); } }
 
 .ranked { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; counter-reset: rank; }
 .ranked li { display: flex; flex-direction: column; gap: 6px; }

@@ -91,7 +91,7 @@ export default function ReportsPage() {
                 <h2>Circulation per day</h2>
                 <div className="legend-inline">
                   {SERIES.map((s) => (
-                    <span key={s.key}><span className={`legend-line ${s.dash ? 'is-dashed' : ''}`} style={{ '--c': s.color }} />{s.label}</span>
+                    <span key={s.key}><span className={`trend-swatch ${s.outlined ? 'is-outlined' : ''}`} style={{ '--c': s.color }} />{s.label}</span>
                   ))}
                   <button className="card-link" onClick={() => setShowTable((v) => !v)}>{showTable ? 'Chart' : 'Table'}</button>
                 </div>
