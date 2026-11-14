@@ -1,0 +1,17 @@
+# Optional: starts a MySQL database for the "mysql" profile.
+#   docker compose up -d
+#   cd backend && mvn spring-boot:run -Dspring-boot.run.profiles=mysql
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: library-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: librarydb
+    ports:
+      - "3306:3306"
+    volumes:
+      - library-mysql-data:/var/lib/mysql
+
+volumes:
+  library-mysql-data:
